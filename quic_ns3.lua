@@ -1,16 +1,15 @@
 do
-    local p_quic = Proto ("quic_d9c", "Quic proto version draft 9 custom")
+    local p_quic = Proto ("quic_ns3", "Quic proto ns3 custom version")
 
     local f = p_quic.fields
 
     f.f_quic_flags = ProtoField.uint8 ("quic.flags","QUIC Flags")
-    f.f_quic_short = ProtoField.uint8 ("quic.short","QUIC Short Header")
-    f.f_quic_long = ProtoField.uint8 ("quic.long","QUIC Long Header")
 
-    f.f_quic_packetType = ProtoField.string ("quic.packetType","QUIC Packet Type")
+    f.f_quic_packetTypeString = ProtoField.string ("quic.packetTypeString","QUIC Packet Type String")
 
     f.f_quic_hasConnectionId = ProtoField.bool("quic.hasConnectionId","QUIC Connection ID Existence")
     f.f_quic_keyPhase = ProtoField.bool("quic.keyPhase","QUIC Key Phase")
+    f.f_quic_spin = ProtoField.bool("quic.spin","QUIC Spin Bit")
 
 
     f.f_quic_DCI = ProtoField.uint64("quic.DCI","Dst Connection ID")
@@ -25,46 +24,48 @@ do
     -- f.f_quic_SCI = ProtoField.bytes("quic.SCI","Src Connection ID")
 
     function p_quic.dissector(tvb, pinfo, tree)
-        pinfo.cols.protocol = "QUIC/DRAFT-9-CUSTOM"
+        pinfo.cols.protocol = "QUIC/NS3"
         local subtree = tree:add (p_quic, tvb()) -- tvb: packet's buffer
         local offset = 0
+        local packetType = 0
+        local packetNumber = 0
 
         local first_oct = tvb(offset, 1) -- 1 byte field
         offset = offset + 1
         subtree:add (f.f_quic_flags, first_oct)
 
-        local headerType = tvb.bitfield()
+        local headerType = first_oct:bitfield(0,1)
 
         if headerType == 0x01 then
             f.f_quic_packetType = ProtoField.uint8 ("quic.packetType","QUIC Packet Type", base.DEC, nil, 0xef)
 
-            local longTree = subtree:add (f.f_quic_long, headerType)
-            local packetType = tvb.bitfield(1,7)
-            longTree:add (f.f_quic_packetType, packetType)
+            local packetType = first_oct:bitfield(1,7)
+            subtree:add (f.f_quic_packetType, packetType)
 
-            if packetType == 0x7f then
-                longTree:add (f.f_quic_packetType, "Initial")
-            elseif packetType == 0x7e then
-                longTree:add (f.f_quic_packetType, "Retry")
-            elseif packetType == 0x7d then
-                longTree:add (f.f_quic_packetType, "Handshake")
-            elseif packetType == 0x7c then
-                longTree:add (f.f_quic_packetType, "0-RTT")
+            if packetType == 0 then
+                subtree:add (f.f_quic_packetTypeString, "Versio Negotiation")
+            elseif packetType == 1 then
+                subtree:add (f.f_quic_packetTypeString, "Initial")
+            elseif packetType == 2 then
+                subtree:add (f.f_quic_packetTypeString, "Retry")
+            elseif packetType == 3 then
+                subtree:add (f.f_quic_packetTypeString, "Handshake")
+            elseif packetType == 4 then
+                subtree:add (f.f_quic_packetTypeString, "0-RTT")
             end
 
         elseif headerType == 0x00 then
             f.f_quic_packetType = ProtoField.uint8 ("quic.packetType","QUIC Packet Type", base.DEC, nil, 0x0f)
-            local shortTree = subtree:add (f.f_quic_short, headerType)
 
-            local hasConnectionId = tvb.bitfield(1,1)
-            local keyPhase = tvb.bitfield(2,1)
-            local spin = tvb.bitfield(3,1)
-            local packetType = tvb.bitfield(4,4)
+            local hasConnectionId = first_oct:bitfield(1,1)
+            local keyPhase = first_oct:bitfield(2,1)
+            local spin = first_oct:bitfield(3,1)
+            packetType = first_oct:bitfield(4,4)
 
-            shortTree:add (f.f_quic_hasConnectionId, hasConnectionId)
-            shortTree:add (f.f_quic_keyPhase, keyPhase)
-            shortTree:add (f.f_quic_spin, spin)
-            shortTree:add (f.f_quic_packetType, packetType)
+            subtree:add (f.f_quic_hasConnectionId, hasConnectionId)
+            subtree:add (f.f_quic_keyPhase, keyPhase)
+            subtree:add (f.f_quic_spin, spin)
+            subtree:add (f.f_quic_packetType, packetType)
 
         end
 
@@ -75,15 +76,15 @@ do
         if headerType == 0x01 then
             local version = tvb(offset, 4)
             offset = offset + 4
-            longTree:add (f.f_quic_version, version)
+            subtree:add (f.f_quic_version, version)
 
         end
 
         if headerType == 0x00 then
-            local pacektNumber = tvb(offset, packetType)
+            packetNumber = tvb(offset, packetType)
             offset = offset + packetType
-        else then
-            local packetNumber = tvb(offset, 4)
+        else
+            packetNumber = tvb(offset, 4)
             offset = offset + 4
         end
         subtree:add (f.f_quic_packetNumber, packetNumber)
