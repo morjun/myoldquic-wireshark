@@ -5,7 +5,7 @@ do
 
     f.f_quic_flags = ProtoField.uint8 ("quic.flags","QUIC Flags")
 
-    f.f_quic_packetTypeString = ProtoField.string ("quic.packetTypeString","QUIC Packet Type String")
+    f.f_quic_packetType = ProtoField.string ("quic.packetType","QUIC Packet Type")
 
     f.f_quic_hasConnectionId = ProtoField.bool("quic.hasConnectionId","QUIC Connection ID Existence")
     f.f_quic_keyPhase = ProtoField.bool("quic.keyPhase","QUIC Key Phase")
@@ -37,25 +37,22 @@ do
         local headerType = first_oct:bitfield(0,1)
 
         if headerType == 0x01 then
-            f.f_quic_packetType = ProtoField.uint8 ("quic.packetType","QUIC Packet Type", base.DEC, nil, 0xef)
 
             local packetType = first_oct:bitfield(1,7)
-            subtree:add (f.f_quic_packetType, packetType)
 
             if packetType == 0 then
-                subtree:add (f.f_quic_packetTypeString, "Versio Negotiation")
+                subtree:add (f.f_quic_packetType, "Version Negotiation")
             elseif packetType == 1 then
-                subtree:add (f.f_quic_packetTypeString, "Initial")
+                subtree:add (f.f_quic_packetType, "Initial")
             elseif packetType == 2 then
-                subtree:add (f.f_quic_packetTypeString, "Retry")
+                subtree:add (f.f_quic_packetType, "Retry")
             elseif packetType == 3 then
-                subtree:add (f.f_quic_packetTypeString, "Handshake")
+                subtree:add (f.f_quic_packetType, "Handshake")
             elseif packetType == 4 then
-                subtree:add (f.f_quic_packetTypeString, "0-RTT")
+                subtree:add (f.f_quic_packetType, "0-RTT")
             end
 
         elseif headerType == 0x00 then
-            f.f_quic_packetType = ProtoField.uint8 ("quic.packetType","QUIC Packet Type", base.DEC, nil, 0x0f)
 
             local hasConnectionId = first_oct:bitfield(1,1)
             local keyPhase = first_oct:bitfield(2,1)
@@ -65,7 +62,6 @@ do
             subtree:add (f.f_quic_hasConnectionId, hasConnectionId)
             subtree:add (f.f_quic_keyPhase, keyPhase)
             subtree:add (f.f_quic_spin, spin)
-            subtree:add (f.f_quic_packetType, packetType)
 
         end
 
@@ -81,8 +77,8 @@ do
         end
 
         if headerType == 0x00 then
-            packetNumber = tvb(offset, packetType)
-            offset = offset + packetType
+            packetNumber = tvb(offset, bit.lshift(1,packetType))
+            offset = offset + bit.lshift(1,packetType)
         else
             packetNumber = tvb(offset, 4)
             offset = offset + 4
