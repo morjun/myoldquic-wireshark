@@ -14,10 +14,10 @@ local function readVarInt64(tvb, offset)
         size = 8
     end
     local valueField = tvb(offset - 1, size)
-    local valueNumber = firstOct:bitfield(2, 6)
-    local value = firstOct:uint64() - bit.lshift(mask, 6)
+    local value = firstOct:uint64() - bit.lshift(mask, 6) --UInt64 Object
+
     if (size > 1) then
-        value = tvb(offset, size - 1):uint64() + bit.lshift(valueNumber, (size - 1) * 8)
+        value = tvb(offset, size - 1):uint64() + bit.lshift(value:tonumber(), (size - 1) * 8)
     end
 
     offset = offset + (size - 1)
