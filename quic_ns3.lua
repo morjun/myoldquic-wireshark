@@ -90,10 +90,14 @@ do
     f.f_quic_keyPhase = ProtoField.bool("quic.keyPhase", "QUIC Key Phase")
     f.f_quic_spin = ProtoField.bool("quic.spin", "QUIC Spin Bit")
 
+    f.f_quic_longHeader = ProtoField.none("quic.longHeader", "QUIC Long Header")
+    f.f_quic_shortHeader = ProtoField.none("quic.shortHeader", "QUIC Short Header")
 
     f.f_quic_DCI = ProtoField.uint64("quic.DCI", "Dst Connection ID")
 
     f.f_quic_version = ProtoField.uint32("quic.version", "QUIC Version")
+    f.f_quic_supportedVersions = ProtoField.none("quic.supportedVersions", "QUIC Supported Versions")
+    f.f_quic_supportedVersion = ProtoField.uint32("quic.supportedVersion", "QUIC Supported Version")
 
     f.f_quic_packetNumber = ProtoField.uint32("quic.packetNumber", "QUIC Packet Number")
     -- f.f_quic_DCIL = ProtoField.uint8 ("quic.DCIL","Dst Connection ID Len", base.DEC, nil, 0xf0)
@@ -117,6 +121,9 @@ do
     f.f_quic_ackBlockGap = ProtoField.uint64("quic.ackBlockGap", "QUIC Ack Block Gap")
     f.f_quic_firstAckBlock = ProtoField.uint64("quic.firstAckBlock", "QUIC First Ack Block")
 
+    f.f_quic_streamLength = ProtoField.uint64("quic.streamLength", "QUIC Stream Length")
+    f.f_quic_stream = ProtoField.string("quic.stream", "QUIC Stream Bytes")
+
 
     function p_quic.dissector(tvb, pinfo, tree)
         pinfo.cols.protocol = "QUIC/NS3"
@@ -127,14 +134,19 @@ do
 
         local first_oct = tvb(offset, 1) -- 1 byte field
         offset = offset + 1
-        local flags = subtree:add(f.f_quic_flags, first_oct)
 
         local headerType = first_oct:bitfield(0, 1)
+        local longHeader
+        local shortHeader
 
         if headerType == 0x01 then
-            local packetType = first_oct:bitfield(1, 7)
+            longHeader = subtree:add(f.f_quic_longHeader)
+            local flags = longHeader:add(f.f_quic_flags, first_oct)
+            packetType = first_oct:bitfield(1, 7)
             flags:add(f.f_quic_packetType, packetType)
         elseif headerType == 0x00 then
+            shortHeader = subtree:add(f.f_quic_shortHeader)
+            local flags = shortHeader:add(f.f_quic_flags, first_oct)
             local hasConnectionId = first_oct:bitfield(1, 1)
             local keyPhase = first_oct:bitfield(2, 1)
             local spin = first_oct:bitfield(3, 1)
@@ -152,77 +164,119 @@ do
         if headerType == 0x01 then
             local version = tvb(offset, 4)
             offset = offset + 4
-            subtree:add(f.f_quic_version, version)
+            longHeader:add(f.f_quic_version, version)
         end
 
         if headerType == 0x00 then
             packetNumber = tvb(offset, bit.lshift(1, packetType))
             offset = offset + bit.lshift(1, packetType)
         else
-            packetNumber = tvb(offset, 4)
-            offset = offset + 4
+            if packetType ~= 0x00 then
+                packetNumber = tvb(offset, 4)
+                offset = offset + 4
+            end
         end
         subtree:add(f.f_quic_packetNumber, packetNumber)
 
-        local frameType = tvb(offset, 1)
-        offset = offset + 1
+        if packetType == 0x00 and headerType == 0x01 then
+            local supportedVersions = longHeader:add(f.f_quic_supportedVersions)
+            while offset < tvb:len() do
+                local supportedVersion = tvb(offset, 4)
+                offset = offset + 4
+                supportedVersions:add(f.f_quic_supportedVersion, supportedVersion)
+            end
+        else
+            while offset < tvb:len() do
+                local frameType = tvb(offset, 1)
+                offset = offset + 1
 
-        local frame = subtree:add(f.f_quic_frameType, frameType)
+                local frame = subtree:add(f.f_quic_frameType, frameType)
 
-        frameType = frameType:uint()
+                frameType = frameType:uint()
 
-        if frameType == 0x01 then
-            local streamIdBuf, streamId, size = readVarInt64(tvb, offset)
-            offset = offset + size
-            frame:add(f.f_quic_streamId, streamIdBuf, streamId)
+                if frameType == 0x01 then
+                    local streamIdBuf, streamId, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_streamId, streamIdBuf, streamId)
 
-            local errorCode = tvb(offset, 2)
-            offset = offset + 2
-            frame:add(f.f_quic_errorCode, errorCode)
+                    local errorCode = tvb(offset, 2)
+                    offset = offset + 2
+                    frame:add(f.f_quic_errorCode, errorCode)
 
-            local streamOffsetBuf, streamOffset, size = readVarInt64(tvb, offset)
-            offset = offset + size
-            frame:add(f.f_quic_streamOffset, streamOffsetBuf, streamOffset)
-        elseif frameType == 0x02 or frameType == 0x03 then
-            local errorCode = tvb(offset, 2)
-            offset = offset + 2
-            frame:add(f.f_quic_errorCode, errorCode)
+                    local streamOffsetBuf, streamOffset, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_streamOffset, streamOffsetBuf, streamOffset)
+                elseif frameType == 0x02 or frameType == 0x03 then
+                    local errorCode = tvb(offset, 2)
+                    offset = offset + 2
+                    frame:add(f.f_quic_errorCode, errorCode)
 
-            local reasonPhraseLengthBuf, reasonPhraseLength, size = readVarInt64(tvb, offset)
-            offset = offset + size
+                    local reasonPhraseLengthBuf, reasonPhraseLength, size = readVarInt64(tvb, offset)
+                    offset = offset + size
 
-            local reasonPhrase = tvb(offset, reasonPhraseLength:tonumber())
-            offset = offset + reasonPhraseLength:tonumber()
+                    local reasonPhrase = tvb(offset, reasonPhraseLength:tonumber())
+                    offset = offset + reasonPhraseLength:tonumber()
 
-            frame:add(f.f_quic_reasonPhrase, reasonPhrase)
+                    frame:add(f.f_quic_reasonPhrase, reasonPhrase)
+                elseif frameType == 0x04 then
+                    local maxDataBuf, maxData, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_maxData, maxDataBuf, maxData)
+                elseif frameType == 0x0d then
+                    local largestAckedBuf, largestAcked, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_largestAcked, largestAckedBuf, largestAcked)
 
-        elseif frameType == 0x04 then
-            local maxDataBuf, maxData, size = readVarInt64(tvb, offset)
-            offset = offset + size
-            frame:add(f.f_quic_maxData, maxDataBuf, maxData)
-        elseif frameType == 0x0d then
-            local largestAckedBuf, largestAcked, size = readVarInt64(tvb, offset)
-            offset = offset + size
-            frame:add(f.f_quic_largestAcked, largestAckedBuf, largestAcked)
+                    local ackDelayBuf, ackDelay, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_ackDelay, ackDelayBuf, ackDelay)
 
-            local ackDelayBuf, ackDelay, size = readVarInt64(tvb, offset)
-            offset = offset + size
-            frame:add(f.f_quic_ackDelay, ackDelayBuf, ackDelay)
+                    local ackBlockCountBuf, ackBlockCount, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    local ackBlocks = frame:add(f.f_quic_ackBlockCount, ackBlockCountBuf, ackBlockCount)
 
-            local ackBlockCountBuf, ackBlockCount, size = readVarInt64(tvb, offset)
-            offset = offset + size
-            local ackBlocks = frame:add(f.f_quic_ackBlockCount, ackBlockCountBuf, ackBlockCount)
+                    local firstAckBlockBuf, firstAckBlock, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    ackBlocks:add(f.f_quic_firstAckBlock, firstAckBlockBuf, firstAckBlock)
 
-            local firstAckBlockBuf, firstAckBlock, size = readVarInt64(tvb, offset)
-            offset = offset + size
-            ackBlocks:add(f.f_quic_firstAckBlock, firstAckBlockBuf, firstAckBlock)
+                    for i = 0, ackBlockCount:tonumber() - 1 do
+                        local gapBuf, gap, size = readVarInt64(tvb, offset)
+                        offset = offset + size
+                        ackBlocks:add(f.f_quic_ackBlockGap, gapBuf, gap)
 
-            for i = 0, ackBlockCount:tonumber() - 1 do
-                local gapBuf, gap = readVarInt64(tvb, offset)
-                ackBlocks:add(f.f_quic_ackBlockGap, gapBuf, gap)
+                        local ackBlockBuf, ackBlock, size = readVarInt64(tvb, offset)
+                        offset = offset + size
+                        ackBlocks:add(f.f_quic_ackBlock, ackBlockBuf, ackBlock)
+                    end
+                elseif frameType == 0x12 then
+                    local streamIdBuf, streamId, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_streamId, streamIdBuf, streamId)
 
-                local ackBlockBuf, ackBlock = readVarInt64(tvb, offset)
-                ackBlocks:add(f.f_quic_ackBlock, ackBlockBuf, ackBlock)
+                    local lengthBuf, length, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_streamLength, lengthBuf, length)
+
+                    local stream = tvb(offset, length:tonumber())
+                    offset = offset + length:tonumber()
+                    frame:add(f.f_quic_stream, stream)
+                elseif frameType == 0x16 then
+                    local streamIdBuf, streamId, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_streamId, streamIdBuf, streamId)
+
+                    local streamOffsetBuf, streamOffset, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_streamOffset, streamOffsetBuf, streamOffset)
+
+                    local lengthBuf, length, size = readVarInt64(tvb, offset)
+                    offset = offset + size
+                    frame:add(f.f_quic_streamLength, lengthBuf, length)
+
+                    local stream = tvb(offset, length:tonumber())
+                    offset = offset + length:tonumber()
+                    frame:add(f.f_quic_stream, stream)
+                end
             end
         end
     end
