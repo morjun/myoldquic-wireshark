@@ -1,3 +1,30 @@
+local function readVarInt64(tvb, offset)
+    local firstOct = tvb(offset, 1)
+
+    offset = offset + 1
+    local size = 1
+    local mask = firstOct:bitfield(0, 2)
+    if (mask == 0x0) then
+        size = 1
+    elseif (mask == 0x1) then
+        size = 2
+    elseif (mask == 0x2) then
+        size = 4
+    elseif (mask == 0x3) then
+        size = 8
+    end
+    local valueField = tvb(offset - 1, size)
+    local valueNumber = firstOct:bitfield(2, 6)
+    local value = firstOct:uint64() - bit.lshift(mask, 6)
+    if (size > 1) then
+        value = tvb(offset, size - 1):uint64() + bit.lshift(valueNumber, (size - 1) * 8)
+    end
+
+    offset = offset + (size - 1)
+    return valueField, value, size
+end
+
+
 do
     local p_quic = Proto("quic_ns3", "Quic proto ns3 custom version")
 
@@ -88,6 +115,7 @@ do
     f.f_quic_ackBlockCount = ProtoField.uint64("quic.ackBlockCount", "QUIC Ack Block Count")
     f.f_quic_ackBlock = ProtoField.uint64("quic.ackBlock", "QUIC Ack Block")
     f.f_quic_ackBlockGap = ProtoField.uint64("quic.ackBlockGap", "QUIC Ack Block Gap")
+    f.f_quic_firstAckBlock = ProtoField.uint64("quic.firstAckBlock", "QUIC First Ack Block")
 
 
     function p_quic.dissector(tvb, pinfo, tree)
@@ -144,59 +172,57 @@ do
         frameType = frameType:uint()
 
         if frameType == 0x01 then
-            local streamId = tvb(offset, 8)
-            offset = offset + 8
-            frame:add(f.f_quic_streamId, streamId)
+            local streamIdBuf, streamId, size = readVarInt64(tvb, offset)
+            offset = offset + size
+            frame:add(f.f_quic_streamId, streamIdBuf, streamId)
 
             local errorCode = tvb(offset, 2)
             offset = offset + 2
             frame:add(f.f_quic_errorCode, errorCode)
 
-            local streamOffset = tvb(offset, 8)
-            offset = offset + 8
-            frame:add(f.f_quic_streamOffset, streamOffset)
+            local streamOffsetBuf, streamOffset, size = readVarInt64(tvb, offset)
+            offset = offset + size
+            frame:add(f.f_quic_streamOffset, streamOffsetBuf, streamOffset)
         elseif frameType == 0x02 or frameType == 0x03 then
             local errorCode = tvb(offset, 2)
             offset = offset + 2
             frame:add(f.f_quic_errorCode, errorCode)
 
-            local reasonPhraseLength = tvb(offset, 8)
-            offset = offset + 8
+            local reasonPhraseLengthBuf, reasonPhraseLength, size = readVarInt64(tvb, offset)
+            offset = offset + size
 
-            local reasonPhrase = tvb(offset, reasonPhraseLength:uint())
-            offset = offset + reasonPhraseLength:uint()
+            local reasonPhrase = tvb(offset, reasonPhraseLength:tonumber())
+            offset = offset + reasonPhraseLength:tonumber()
+
             frame:add(f.f_quic_reasonPhrase, reasonPhrase)
 
-        -- TODO: 고정길이가 아니라 가변길이로 읽도록 (ReadVarInt64 in quic-subheader.cc) 수정
         elseif frameType == 0x04 then
-            local maxData = tvb(offset, 8)
-            offset = offset + 8
-            frame:add(f.f_quic_maxData, maxData)
+            local maxDataBuf, maxData, size = readVarInt64(tvb, offset)
+            offset = offset + size
+            frame:add(f.f_quic_maxData, maxDataBuf, maxData)
         elseif frameType == 0x0d then
-            local largestAcked = tvb(offset, 8)
-            offset = offset + 8
-            frame:add(f.f_quic_largestAcked, largestAcked)
+            local largestAckedBuf, largestAcked, size = readVarInt64(tvb, offset)
+            offset = offset + size
+            frame:add(f.f_quic_largestAcked, largestAckedBuf, largestAcked)
 
-            local ackDelay = tvb(offset, 8)
-            offset = offset + 8
-            frame:add(f.f_quic_ackDelay, ackDelay)
+            local ackDelayBuf, ackDelay, size = readVarInt64(tvb, offset)
+            offset = offset + size
+            frame:add(f.f_quic_ackDelay, ackDelayBuf, ackDelay)
 
-            local ackBlockCount = tvb(offset, 8)
-            offset = offset + 8
-            local ackBlocks = frame:add(f.f_quic_ackBlockCount, ackBlockCount)
+            local ackBlockCountBuf, ackBlockCount, size = readVarInt64(tvb, offset)
+            offset = offset + size
+            local ackBlocks = frame:add(f.f_quic_ackBlockCount, ackBlockCountBuf, ackBlockCount)
 
-            local firstAckBlock = tvb(offset, 8)
-            offset = offset + 8
-            frame:add(f.f_quic_firstAckBlock, firstAckBlock)
+            local firstAckBlockBuf, firstAckBlock, size = readVarInt64(tvb, offset)
+            offset = offset + size
+            ackBlocks:add(f.f_quic_firstAckBlock, firstAckBlockBuf, firstAckBlock)
 
-            for i = 1, ackBlockCount:uint() do
-                local gap = tvb(offset, 8)
-                offset = offset + 8
-                ackBlocks:add(f.f_quic_ackBlockGap, gap)
+            for i = 0, ackBlockCount:tonumber() - 1 do
+                local gapBuf, gap = readVarInt64(tvb, offset)
+                ackBlocks:add(f.f_quic_ackBlockGap, gapBuf, gap)
 
-                local ackBlock = tvb(offset, 8)
-                offset = offset + 8
-                ackBlocks:add(f.f_quic_ackBlock, ackBlock)
+                local ackBlockBuf, ackBlock = readVarInt64(tvb, offset)
+                ackBlocks:add(f.f_quic_ackBlock, ackBlockBuf, ackBlock)
             end
         end
     end
